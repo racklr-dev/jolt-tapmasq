@@ -128,13 +128,24 @@
 
 (defn nat-enable!
   "MASQUERADE the guest subnet out the host's egress interface (for
-  allow-listed outbound)."
+  allow-listed outbound). Idempotent: adds the rule only when absent."
   [subnet egress-iface]
-  (shell/sh "sudo" "iptables" "-t" "nat" "-C" "POSTROUTING" "-s" subnet
-            "-o" egress-iface "-j" "MASQUERADE")
-  (sudo "iptables" "-t" "nat" "-A" "POSTROUTING" "-s" subnet
-        "-o" egress-iface "-j" "MASQUERADE")
+  (let [r (shell/sh "sudo" "iptables" "-t" "nat" "-C" "POSTROUTING" "-s" subnet
+                    "-o" egress-iface "-j" "MASQUERADE")]
+    (when-not (zero? (:exit r))
+      (sudo "iptables" "-t" "nat" "-A" "POSTROUTING" "-s" subnet
+            "-o" egress-iface "-j" "MASQUERADE")))
   :enabled)
+
+(defn nat-disable!
+  "Remove the MASQUERADE rule for the guest subnet. Idempotent."
+  [subnet egress-iface]
+  (let [r (shell/sh "sudo" "iptables" "-t" "nat" "-C" "POSTROUTING" "-s" subnet
+                    "-o" egress-iface "-j" "MASQUERADE")]
+    (when (zero? (:exit r))
+      (sudo "iptables" "-t" "nat" "-D" "POSTROUTING" "-s" subnet
+            "-o" egress-iface "-j" "MASQUERADE")))
+  :disabled)
 
 ;; --- AdGuard ---------------------------------------------------------------
 (defn adguard-allowlist
