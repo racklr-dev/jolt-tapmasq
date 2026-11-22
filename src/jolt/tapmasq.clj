@@ -82,9 +82,9 @@
     (when (.isFile f)
       (some (fn [line]
               (let [parts (str/split (str/trim line) #"\s+")]
-                (when (and (>= (count parts) 2)
+                (when (and (>= (count parts) 3)
                            (= mac (str/lower-case (nth parts 1))))
-                  (first parts))))
+                  (nth parts 2))))
             (str/split-lines (slurp f))))))
 
 (defn wait-lease
