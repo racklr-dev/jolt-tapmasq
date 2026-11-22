@@ -59,23 +59,27 @@
          "no-resolv\n"
          (when upstream (str "server=" upstream "\n")))))
 
-(defn dnsmasq-start!
-  "Start dnsmasq with a config file. Returns the pid file path."
-  [{:keys [config-file pid-file lease-file log-file]}]
-  (let [r (shell/sh "bash" "-c"
-                    (str "sudo pkill -x dnsmasq 2>/dev/null; sleep 1; "
-                         "(sudo nohup /usr/sbin/dnsmasq -C " config-file
-                         " --pid-file=" pid-file " -k --log-dhcp --log-facility=-"
-                         " --dhcp-leasefile=" lease-file
-                         " > " log-file " 2>&1 < /dev/null &)"))]
-    (Thread/sleep 2000)
-    pid-file))
-
 (defn dnsmasq-stop!
-  "Stop dnsmasq."
-  []
-  (shell/sh "sudo" "pkill" "-x" "dnsmasq")
-  :stopped)
+  "Stop one dnsmasq instance by pid-file (when given), else every dnsmasq."
+  ([] (shell/sh "sudo" "pkill" "-x" "dnsmasq") :stopped)
+  ([pid-file]
+   (shell/sh "sudo" "bash" "-c"
+             (str "[ -f " pid-file " ] && sudo kill \"$(cat " pid-file ")\" 2>/dev/null; true"))
+   :stopped))
+
+(defn dnsmasq-start!
+  "Start one dnsmasq instance with a config file. Several instances can
+  coexist as long as each binds its own interface; this kills only a stale
+  instance from its own pid-file first. Returns the pid file path."
+  [{:keys [config-file pid-file lease-file log-file]}]
+  (dnsmasq-stop! pid-file)
+  (shell/sh "sudo" "bash" "-c"
+            (str "sudo nohup /usr/sbin/dnsmasq -C " config-file
+                 " --pid-file=" pid-file " -k --log-dhcp --log-facility=-"
+                 " --dhcp-leasefile=" lease-file
+                 " > " log-file " 2>&1 < /dev/null &"))
+  (Thread/sleep 1500)
+  pid-file)
 
 (defn lease-ip
   "Read the dnsmasq lease file and return the leased IP for a MAC, or nil."
