@@ -1,8 +1,8 @@
-;; jolt.net — host-side networking for jolt-microvm sandboxes: the TAP +
+;; jolt.tapmasq — host-side networking for jolt-microvm sandboxes: the TAP +
 ;; dnsmasq + nftables layer every VM mode needs now that libkrun 2.0 has no
 ;; port-map/TSI. Default policy is DENY: forwarded traffic from the guest
 ;; subnet is dropped except DNS to the resolver and allow-listed CIDRs.
-(ns jolt.net
+(ns jolt.tapmasq
   (:require [clojure.java.shell :as shell]
             [clojure.string :as str]))
 
