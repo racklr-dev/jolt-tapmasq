@@ -1,1 +1,8 @@
-{:paths ["src"]}
+{;; jolt-tapmasq uses only clojure.java.shell + java.io, so no jolt.ffi
+ ;; features gate it; the floor matches the rest of the jolt-sandbox stack so
+ ;; every library in the tree reads the same minimum.
+ :jolt/min-version "0.8.28"
+
+ :paths ["src"]
+
+ :tasks {test "jolt run test/jolt/tapmasq_test.clj"}}

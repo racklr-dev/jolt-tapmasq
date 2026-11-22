@@ -1,0 +1,15 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install jolt (pinned)
+        run: curl -sL https://raw.githubusercontent.com/jolt-lang/jolt/main/install | bash -s -- --version 0.8.28
+      - name: Pure-function smoke (no privileges needed)
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          jolt test
+      # The TAP/dnsmasq/nftables side needs sudo + a TAP device; it is exercised
+      # by jolt-microvm's boot tests on a self-hosted KVM runner.
