@@ -53,6 +53,7 @@
   (let [host-ip (first (str/split subnet-cidr #"/"))]
     (str "interface=" interface "\n"
          "bind-interfaces\n"
+         "except-interface=lo\n"
          "dhcp-range=" range-start "," range-end ",255.255.255.0,12h\n"
          "dhcp-option=3," host-ip "\n"
          "dhcp-option=6," dns "\n"
