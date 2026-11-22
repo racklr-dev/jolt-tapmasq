@@ -47,15 +47,17 @@
 (defn dnsmasq-config
   "The dhcpd.conf we own: DHCP on the TAP, default route to the host TAP IP,
   and DNS pointed at the allow-list resolver (AdGuard). opts: :interface
-  :subnet-cidr (host side) :range-start :range-end :dns."
-  [{:keys [interface subnet-cidr range-start range-end dns]}]
+  :subnet-cidr (host side) :range-start :range-end :dns, and optionally
+  :upstream (a resolver dnsmasq forwards queries to; omit to stay DHCP-only)."
+  [{:keys [interface subnet-cidr range-start range-end dns upstream]}]
   (let [host-ip (first (str/split subnet-cidr #"/"))]
     (str "interface=" interface "\n"
          "bind-interfaces\n"
          "dhcp-range=" range-start "," range-end ",255.255.255.0,12h\n"
          "dhcp-option=3," host-ip "\n"
          "dhcp-option=6," dns "\n"
-         "no-resolv\n")))
+         "no-resolv\n"
+         (when upstream (str "server=" upstream "\n")))))
 
 (defn dnsmasq-start!
   "Start dnsmasq with a config file. Returns the pid file path."

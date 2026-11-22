@@ -19,6 +19,17 @@
   (assert (str/includes? cfg "dhcp-option=6,192.168.44.1"))
   (assert (str/includes? cfg "no-resolv")))
 
+;; :upstream turns dnsmasq into a forwarding resolver (guest -> AdGuard or a
+;; public resolver), and drops no-resolv.
+(let [cfg (net/dnsmasq-config {:interface "jolt0"
+                               :subnet-cidr "192.168.44.1/24"
+                               :range-start "192.168.44.10"
+                               :range-end "192.168.44.200"
+                               :dns "192.168.44.1"
+                               :upstream "1.1.1.1"})]
+  (assert (str/includes? cfg "server=1.1.1.1"))
+  (assert (str/includes? cfg "no-resolv")))
+
 ;; --- lease-ip --------------------------------------------------------------
 (let [f "/tmp/jolt-tapmasq-test.leases"]
   (spit f (str "0 02:00:00:00:00:01 192.168.44.17 guest1 *\n"))
