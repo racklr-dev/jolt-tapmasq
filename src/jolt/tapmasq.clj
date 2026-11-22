@@ -1,7 +1,7 @@
 ;; jolt.tapmasq — host-side networking for jolt-microvm sandboxes: the TAP +
-;; dnsmasq + nftables layer every VM mode needs now that libkrun 2.0 has no
-;; port-map/TSI. Default policy is DENY: forwarded traffic from the guest
-;; subnet is dropped except DNS to the resolver and allow-listed CIDRs.
+;; dnsmasq + nftables layer every VM mode needs on libkrun 2.0 (no port-map/TSI).
+;; Default policy is DENY: forwarded traffic from the guest subnet is dropped
+;; except DNS to the resolver and allow-listed CIDRs.
 (ns jolt.tapmasq
   (:require [clojure.java.shell :as shell]
             [clojure.string :as str]))
@@ -9,23 +9,26 @@
 (defn- sudo [& args]
   (let [r (apply shell/sh "sudo" args)]
     (when-not (zero? (:exit r))
-      (throw (ex-info (str "sudo " (str/join " " args) " failed") {:stderr (:err r)})))
+      (throw (ex-info (str "sudo " (str/join " " args) " failed")
+                      {:stderr (:err r)})))
     r))
 
 (defn- user [] (str/trim (:out (shell/sh "id" "-un"))))
 
 ;; --- TAP -------------------------------------------------------------------
 (defn tap-create!
-  "Create and bring up a TAP device owned by the current user. Returns name."
+  "Create and bring up a TAP device owned by the current user (with vnet_hdr,
+  which libkrun's tap backend expects). Returns name."
   [name]
-  (sudo "ip" "tuntap" "add" "dev" name "mode" "tap" "user" (user))
+  (shell/sh "sudo" "ip" "link" "delete" name)
+  (sudo "ip" "tuntap" "add" "dev" name "mode" "tap" "user" (user) "vnet_hdr")
   (sudo "ip" "link" "set" name "up")
   name)
 
 (defn tap-delete!
   "Delete a TAP device. Returns :ok."
   [name]
-  (sudo "ip" "link" "delete" name)
+  (shell/sh "sudo" "ip" "link" "delete" name)
   :ok)
 
 (defn tap-ip!
@@ -34,12 +37,17 @@
   (sudo "ip" "addr" "add" cidr "dev" name)
   :ok)
 
+(defn ip-forward!
+  "Enable/disable IPv4 forwarding on the host (needed for guest egress)."
+  [on?]
+  (sudo "sysctl" "-w" (str "net.ipv4.ip_forward=" (if on? 1 0)))
+  :ok)
+
 ;; --- dnsmasq ---------------------------------------------------------------
 (defn dnsmasq-config
   "The dhcpd.conf we own: DHCP on the TAP, default route to the host TAP IP,
-  and DNS pointed at the allow-list resolver (AdGuard). opts:
-  :interface :subnet-cidr (host side, e.g. 192.168.44.1/24)
-  :range-start :range-end :dns (resolver IP)."
+  and DNS pointed at the allow-list resolver (AdGuard). opts: :interface
+  :subnet-cidr (host side) :range-start :range-end :dns."
   [{:keys [interface subnet-cidr range-start range-end dns]}]
   (let [host-ip (first (str/split subnet-cidr #"/"))]
     (str "interface=" interface "\n"
@@ -50,24 +58,52 @@
          "no-resolv\n")))
 
 (defn dnsmasq-start!
-  "Start dnsmasq with a config file. Returns the pid. opts: :config-file
-  :pid-file :lease-file."
-  [{:keys [config-file pid-file lease-file]}]
-  (sudo "dnsmasq" "--no-daemon" "-C" config-file "--pid-file" pid-file
-        "--dhcp-leasefile" lease-file "-k" & )
-  pid-file)
+  "Start dnsmasq with a config file. Returns the pid file path."
+  [{:keys [config-file pid-file lease-file log-file]}]
+  (let [r (shell/sh "bash" "-c"
+                    (str "sudo pkill -x dnsmasq 2>/dev/null; sleep 1; "
+                         "(sudo nohup /usr/sbin/dnsmasq -C " config-file
+                         " --pid-file=" pid-file " -k --log-dhcp --log-facility=-"
+                         " --dhcp-leasefile=" lease-file
+                         " > " log-file " 2>&1 < /dev/null &)"))]
+    (Thread/sleep 2000)
+    pid-file))
 
 (defn dnsmasq-stop!
-  "Stop the dnsmasq named by a pid file."
-  [pid-file]
-  (shell/sh "sudo" "kill" "$(cat " pid-file ")")
+  "Stop dnsmasq."
+  []
+  (shell/sh "sudo" "pkill" "-x" "dnsmasq")
   :stopped)
+
+(defn lease-ip
+  "Read the dnsmasq lease file and return the leased IP for a MAC, or nil."
+  [lease-file mac]
+  (let [f (java.io.File. lease-file)]
+    (when (.isFile f)
+      (some (fn [line]
+              (let [parts (str/split (str/trim line) #"\s+")]
+                (when (and (>= (count parts) 2)
+                           (= mac (str/lower-case (nth parts 1))))
+                  (first parts))))
+            (str/split-lines (slurp f))))))
+
+(defn wait-lease
+  "Poll the lease file until mac has a lease or timeout-ms elapses."
+  [lease-file mac timeout-ms]
+  (let [start (System/currentTimeMillis)]
+    (loop []
+      (let [ip (lease-ip lease-file mac)]
+        (cond
+          ip ip
+          (> (- (System/currentTimeMillis) start) timeout-ms)
+          (throw (ex-info "timed out waiting for DHCP lease" {:mac mac}))
+          :else (do (Thread/sleep 100) (recur)))))))
 
 ;; --- nftables --------------------------------------------------------------
 (defn nftables-apply!
   "Default-DENY egress for the guest subnet: drop all forwarded traffic except
   DNS to :dns and allow-listed :allow-cidrs. Uses table inet <table>."
-  [{:keys [table subnet dns allow-cidrs]}]
+  [{:keys [table subnet dns allow-cidrs rules-file]}]
   (let [rules (str
                "add table inet " table "\n"
                "flush table inet " table "\n"
@@ -78,7 +114,8 @@
                (apply str (for [c allow-cidrs]
                             (str "add rule inet " table " forward ip saddr " subnet
                                  " ip daddr " c " accept\n"))))]
-    (shell/sh "bash" "-c" (str "printf '%s' " (pr-str rules) " | sudo nft -f -"))
+    (spit rules-file rules)
+    (sudo "nft" "-f" rules-file)
     :applied))
 
 (defn nftables-clear!
@@ -87,9 +124,18 @@
   (shell/sh "sudo" "nft" "delete" "table" "inet" table)
   :cleared)
 
+(defn nat-enable!
+  "MASQUERADE the guest subnet out the host's egress interface (for
+  allow-listed outbound)."
+  [subnet egress-iface]
+  (shell/sh "sudo" "iptables" "-t" "nat" "-C" "POSTROUTING" "-s" subnet
+            "-o" egress-iface "-j" "MASQUERADE")
+  (sudo "iptables" "-t" "nat" "-A" "POSTROUTING" "-s" subnet
+        "-o" egress-iface "-j" "MASQUERADE")
+  :enabled)
+
 ;; --- AdGuard ---------------------------------------------------------------
 (defn adguard-allowlist
-  "AdGuard Home custom-filtering allow-list for a default-deny resolver.
-  Every other domain is NXDOMAIN/blackholed."
+  "AdGuard Home custom-filtering allow-list for a default-deny resolver."
   [domains]
   (str "@@||" (str/join "^\n@@||" domains) "^\n"))
