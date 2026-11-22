@@ -103,19 +103,23 @@
 
 ;; --- nftables --------------------------------------------------------------
 (defn nftables-apply!
-  "Default-DENY egress for the guest subnet: drop all forwarded traffic except
-  DNS to :dns and allow-listed :allow-cidrs. Uses table inet <table>."
+  "Default-DENY egress for the guest subnet: the forward chain accepts by
+  default (it never touches unrelated forwarded traffic), then drops any new
+  egress from :subnet that is not DNS to :dns or an allow-listed :allow-cidrs
+  CIDR. Established/related reply traffic is accepted up front so answers
+  flow back to the guest. Uses table inet <table>."
   [{:keys [table subnet dns allow-cidrs rules-file]}]
   (let [rules (str
                "add table inet " table "\n"
                "flush table inet " table "\n"
-               "add chain inet " table " forward { type filter hook forward priority 0; policy drop; }\n"
-               "add rule inet " table " forward ip saddr " subnet " ct state established,related accept\n"
+               "add chain inet " table " forward { type filter hook forward priority 0; policy accept; }\n"
+               "add rule inet " table " forward ct state established,related accept\n"
                "add rule inet " table " forward ip saddr " subnet " ip daddr " dns " udp dport 53 accept\n"
                "add rule inet " table " forward ip saddr " subnet " ip daddr " dns " tcp dport 53 accept\n"
                (apply str (for [c allow-cidrs]
                             (str "add rule inet " table " forward ip saddr " subnet
-                                 " ip daddr " c " accept\n"))))]
+                                 " ip daddr " c " accept\n")))
+               "add rule inet " table " forward ip saddr " subnet " drop\n")]
     (spit rules-file rules)
     (sudo "nft" "-f" rules-file)
     :applied))
