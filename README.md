@@ -3,9 +3,9 @@
 [![tests](https://github.com/racklr-dev/jolt-tapmasq/actions/workflows/ci.yml/badge.svg)](https://github.com/racklr-dev/jolt-tapmasq/actions/workflows/ci.yml)
 
 Host-side networking for [jolt-microvm](https://github.com/racklr-dev/jolt-microvm)
-sandboxes: the **TAP + dnsmasq + nftables** layer every VM mode needs on
+sandboxes: the **TAP + dnsmasq + nftables** layer that gives a VM its network on
 [libkrun](https://github.com/containers/libkrun) 2.0, which has no
-`port_map`/TSI — the guest instead DHCPs on a TAP and the host reaches it at its
+`port_map`/TSI. The guest instead DHCPs on a TAP and the host reaches it at its
 leased IP.
 
 Default policy is **DENY**: forwarded traffic from the guest subnet is dropped
@@ -55,33 +55,33 @@ except DNS to the resolver and allow-listed CIDRs.
 (net/tap-delete! "jolt0")
 ```
 
-`jolt-microvm` composes these calls for you — this library is the plumbing you
-reach for when you want to wire the network layer by hand, or build your own
+`jolt-microvm` composes these calls for you. This library is the plumbing to use
+when you want to wire the network layer by hand, or build your own
 VM runner on top of [jolt-libkrun](https://github.com/racklr-dev/jolt-libkrun).
 
 ## The pieces
 
-- **TAP** — `tap-create!` makes a `vnet_hdr` TAP owned by the current user
+- **TAP**: `tap-create!` makes a `vnet_hdr` TAP owned by the current user
   (what libkrun's tap backend expects), `tap-ip!` assigns the host-side IP,
   `ip-forward!` toggles IPv4 forwarding.
-- **dnsmasq** — `dnsmasq-config` builds the `dhcpd.conf` we own;
+- **dnsmasq**: `dnsmasq-config` builds the `dhcpd.conf` we own;
   `dnsmasq-start!`/`dnsmasq-stop!` run it with a pid/lease/log file, and
   `lease-ip`/`wait-lease` read the guest's IP out of the lease file.
-- **nftables** — `nftables-apply!` writes and applies a default-`drop` forward
+- **nftables**: `nftables-apply!` writes and applies a default-`drop` forward
   chain: established/related, DNS to the resolver, then one accept rule per
   allow-listed CIDR. `nat-enable!` MASQUERADEs the subnet out an egress
   interface.
-- **AdGuard** — `adguard-allowlist` renders the `@@||domain^` custom-filtering
+- **AdGuard**: `adguard-allowlist` renders the `@@||domain^` custom-filtering
   allow-list for a default-deny AdGuard Home resolver.
 
 ## Modules
 
-- `jolt.tapmasq` — everything above, in one namespace.
+- `jolt.tapmasq`: everything above, in one namespace.
 
 ## Requirements
 
 - `ip`, `sysctl`, `nft`, `iptables`, `dnsmasq` on the host.
-- `sudo` — every state-changing call runs through it.
+- `sudo`: every state-changing call runs through it.
 
 ## License
 
