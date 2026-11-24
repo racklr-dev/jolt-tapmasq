@@ -175,3 +175,18 @@
   "AdGuard Home custom-filtering allow-list for a default-deny resolver."
   [domains]
   (str "@@||" (str/join "^\n@@||" domains) "^\n"))
+
+(defn sweep!
+  "Delete every jolt* tap device, kill all dnsmasq instances, and flush the
+  nftables ruleset + NAT POSTROUTING a crashed VM may have left behind. The
+  nuclear cleanup for a host left dirty; safe to call when nothing is running."
+  []
+  (shell/sh "sudo" "pkill" "-x" "dnsmasq")
+  (let [taps (-> (shell/sh "sh" "-c" "ip -o link show | awk -F': ' '/jolt/{print $2}'")
+                 :out str/split-lines)]
+    (doseq [t taps]
+      (when (seq t)
+        (shell/sh "sudo" "ip" "link" "delete" (str/trim t)))))
+  (shell/sh "sudo" "nft" "flush" "ruleset")
+  (shell/sh "sudo" "iptables" "-t" "nat" "-F" "POSTROUTING")
+  :swept)
