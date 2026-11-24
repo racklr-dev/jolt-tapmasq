@@ -48,8 +48,11 @@
   "The dhcpd.conf we own: DHCP on the TAP, default route to the host TAP IP,
   and DNS pointed at the allow-list resolver (AdGuard). opts: :interface
   :subnet-cidr (host side) :range-start :range-end :dns, and optionally
-  :upstream (a resolver dnsmasq forwards queries to; omit to stay DHCP-only)."
-  [{:keys [interface subnet-cidr range-start range-end dns upstream]}]
+  :upstream (a resolver dnsmasq forwards queries to; omit to stay DHCP-only),
+  :allow-domains (domain allow-list — when present, dnsmasq forwards only those
+  domains and their subdomains upstream and sinkholes everything else, so DNS
+  itself becomes the domain gate)."
+  [{:keys [interface subnet-cidr range-start range-end dns upstream allow-domains]}]
   (let [host-ip (first (str/split subnet-cidr #"/"))]
     (str "interface=" interface "\n"
          "bind-interfaces\n"
@@ -58,7 +61,11 @@
          "dhcp-option=3," host-ip "\n"
          "dhcp-option=6," dns "\n"
          "no-resolv\n"
-         (when upstream (str "server=" upstream "\n")))))
+         (if (seq allow-domains)
+           (str (apply str (for [d allow-domains]
+                             (str "server=/" d "/" upstream "\n")))
+                "address=/#/0.0.0.0\n")
+           (when upstream (str "server=" upstream "\n"))))))
 
 (defn dnsmasq-stop!
   "Stop one dnsmasq instance by pid-file (when given), else every dnsmasq."
@@ -107,27 +114,34 @@
           :else (do (Thread/sleep 100) (recur)))))))
 
 ;; --- nftables --------------------------------------------------------------
+(defn nftables-rules
+  "The nft rules string for default-deny egress (pure, so it is testable):
+  accept established/related, DNS to :dns, :allow-cidrs, and tcp :allow-ports;
+  drop all other new egress from :subnet."
+  [{:keys [table subnet dns allow-cidrs allow-ports]}]
+  (str
+   "add table inet " table "\n"
+   "flush table inet " table "\n"
+   "add chain inet " table " forward { type filter hook forward priority 0; policy accept; }\n"
+   "add rule inet " table " forward ct state established,related accept\n"
+   "add rule inet " table " forward ip saddr " subnet " ip daddr " dns " udp dport 53 accept\n"
+   "add rule inet " table " forward ip saddr " subnet " ip daddr " dns " tcp dport 53 accept\n"
+   (apply str (for [c allow-cidrs]
+                (str "add rule inet " table " forward ip saddr " subnet
+                     " ip daddr " c " accept\n")))
+   (apply str (for [p allow-ports]
+                (str "add rule inet " table " forward ip saddr " subnet
+                     " tcp dport " p " accept\n")))
+   "add rule inet " table " forward ip saddr " subnet " drop\n"))
+
 (defn nftables-apply!
-  "Default-DENY egress for the guest subnet: the forward chain accepts by
-  default (it never touches unrelated forwarded traffic), then drops any new
-  egress from :subnet that is not DNS to :dns or an allow-listed :allow-cidrs
-  CIDR. Established/related reply traffic is accepted up front so answers
-  flow back to the guest. Uses table inet <table>."
-  [{:keys [table subnet dns allow-cidrs rules-file]}]
-  (let [rules (str
-               "add table inet " table "\n"
-               "flush table inet " table "\n"
-               "add chain inet " table " forward { type filter hook forward priority 0; policy accept; }\n"
-               "add rule inet " table " forward ct state established,related accept\n"
-               "add rule inet " table " forward ip saddr " subnet " ip daddr " dns " udp dport 53 accept\n"
-               "add rule inet " table " forward ip saddr " subnet " ip daddr " dns " tcp dport 53 accept\n"
-               (apply str (for [c allow-cidrs]
-                            (str "add rule inet " table " forward ip saddr " subnet
-                                 " ip daddr " c " accept\n")))
-               "add rule inet " table " forward ip saddr " subnet " drop\n")]
-    (spit rules-file rules)
-    (sudo "nft" "-f" rules-file)
-    :applied))
+  "Default-DENY egress for the guest subnet (see nftables-rules), applied via
+  nft -f. :rules-file is where the rules are written before applying."
+  [{:keys [table subnet dns allow-cidrs allow-ports rules-file]}]
+  (spit rules-file (nftables-rules {:table table :subnet subnet :dns dns
+                                    :allow-cidrs allow-cidrs :allow-ports allow-ports}))
+  (sudo "nft" "-f" rules-file)
+  :applied)
 
 (defn nftables-clear!
   "Remove the egress table."
